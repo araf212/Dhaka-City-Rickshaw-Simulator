@@ -1,0 +1,6 @@
+{
+  "name": "Dhaka City Rickshaw Simulator",
+  "description": "A stylized 3D open-world driving simulator navigating authentic Dhaka districts with rickshaw physics, passenger missions, traffic AI, and elevated Metro Rail.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
