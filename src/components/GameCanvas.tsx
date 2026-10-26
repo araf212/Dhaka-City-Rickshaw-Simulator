@@ -1,6 +1,5 @@
 import React, { useEffect, useRef } from 'react';
 import * as THREE from 'three';
-import { RoomEnvironment } from 'three/examples/jsm/environments/RoomEnvironment.js';
 import { CameraMode, WeatherPreset, DistrictId } from '../game/types';
 import { ProceduralCity } from '../game/world/ProceduralCity';
 import { MetroSystem } from '../game/world/MetroSystem';
@@ -55,74 +54,79 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
   weatherRef
 }) => {
   const mountRef = useRef<HTMLDivElement | null>(null);
+  const isPlayingRef = useRef(isPlaying);
+  const cameraModeRef = useRef(cameraMode);
+
+  isPlayingRef.current = isPlaying;
+  cameraModeRef.current = cameraMode;
 
   useEffect(() => {
     const container = mountRef.current;
     if (!container) return;
 
-    // Detect software WebGL
+    // Detect software WebGL safely without hanging
     const isSoftwareGl = (() => {
-      const gl = document.createElement('canvas').getContext('webgl2');
-      if (!gl) return true;
-      const ext = gl.getExtension('WEBGL_debug_renderer_info');
-      const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
-      const gpu = String(gl.getParameter(param));
-      gl.getExtension('WEBGL_lose_context')?.loseContext();
-      return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+      try {
+        const probeCanvas = document.createElement('canvas');
+        const gl = probeCanvas.getContext('webgl2') || probeCanvas.getContext('webgl');
+        if (!gl) return true;
+        const ext = gl.getExtension('WEBGL_debug_renderer_info');
+        const param = ext ? ext.UNMASKED_RENDERER_WEBGL : gl.RENDERER;
+        const gpu = String(gl.getParameter(param) || '');
+        return /SwiftShader|llvmpipe|softpipe|Software|Basic Render/i.test(gpu);
+      } catch {
+        return false;
+      }
     })();
 
     // 1. Scene, Camera, Renderer
     const scene = new THREE.Scene();
-    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.2, 700);
-    camera.position.set(0, 15, -25);
+    const camera = new THREE.PerspectiveCamera(60, window.innerWidth / window.innerHeight, 0.3, 600);
+    camera.position.set(0, 16, -26);
 
     const renderer = new THREE.WebGLRenderer({
-      antialias: !isSoftwareGl,
-      powerPreference: 'high-performance'
+      powerPreference: 'high-performance',
+      antialias: !isSoftwareGl
     });
     renderer.setSize(window.innerWidth, window.innerHeight);
-    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio, 2));
+    renderer.setPixelRatio(isSoftwareGl ? 1 : Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.outputColorSpace = THREE.SRGBColorSpace;
     renderer.toneMapping = THREE.ACESFilmicToneMapping;
     renderer.toneMappingExposure = 1.1;
-    renderer.shadowMap.enabled = !isSoftwareGl;
-    renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+
+    // Soft shadows only on GPU
+    if (!isSoftwareGl && gameState.settings.graphicsQuality !== 'low') {
+      renderer.shadowMap.enabled = true;
+      renderer.shadowMap.type = THREE.PCFSoftShadowMap;
+    } else {
+      renderer.shadowMap.enabled = false;
+    }
 
     container.appendChild(renderer.domElement);
 
-    // 2. Procedural Studio Environment Reflection
-    try {
-      const pmremGenerator = new THREE.PMREMGenerator(renderer);
-      scene.environment = pmremGenerator.fromScene(new RoomEnvironment(), 0.04).texture;
-      pmremGenerator.dispose();
-    } catch (e) {
-      console.warn('RoomEnvironment fallback', e);
-    }
-
-    // 3. Lighting Rig
-    const hemiLight = new THREE.HemisphereLight(0x93c5fd, 0x166534, 0.8);
+    // 2. Balanced Studio & Natural Ambient Lighting
+    const hemiLight = new THREE.HemisphereLight(0x93c5fd, 0x166534, 0.85);
     hemiLight.position.set(0, 50, 0);
     scene.add(hemiLight);
 
     const dirLight = new THREE.DirectionalLight(0xfffbeb, 1.4);
     dirLight.position.set(40, 60, 30);
-    if (!isSoftwareGl) {
+    if (renderer.shadowMap.enabled) {
       dirLight.castShadow = true;
-      dirLight.shadow.mapSize.width = 2048;
-      dirLight.shadow.mapSize.height = 2048;
+      dirLight.shadow.mapSize.width = 1024;
+      dirLight.shadow.mapSize.height = 1024;
       dirLight.shadow.camera.near = 5;
       dirLight.shadow.camera.far = 160;
-      const d = 45;
+      const d = 40;
       dirLight.shadow.camera.left = -d;
       dirLight.shadow.camera.right = d;
       dirLight.shadow.camera.top = d;
       dirLight.shadow.camera.bottom = -d;
       dirLight.shadow.bias = -0.0005;
-      dirLight.shadow.normalBias = 0.02;
     }
     scene.add(dirLight);
 
-    // 4. World Modules
+    // 3. World Modules
     const city = new ProceduralCity();
     scene.add(city.group);
 
@@ -132,7 +136,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     const traffic = new TrafficManager(gameState.settings.trafficDensity);
     scene.add(traffic.group);
 
-    const pedestrians = new PedestrianManager(26);
+    const pedestrians = new PedestrianManager(18);
     scene.add(pedestrians.group);
 
     const weather = new WeatherSystem(scene, dirLight, hemiLight);
@@ -148,34 +152,20 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
     scene.add(missions.group);
     missionRef.current = missions;
 
-    // 5. Game Loop & Pacing
+    // 4. Game Loop with standard 60fps requestAnimationFrame
     const clock = new THREE.Clock();
     let frameId = 0;
     let titlePanAngle = 0;
-
-    // Software GL pacing function
-    function afterDraw(cb: () => void) {
-      const gl = renderer.getContext() as WebGL2RenderingContext;
-      const sync = gl.fenceSync(gl.SYNC_GPU_COMMANDS_COMPLETE, 0);
-      gl.flush();
-      const poll = () => {
-        const state = sync && gl.getSyncParameter(sync, gl.SYNC_STATUS);
-        if (state === gl.UNSIGNALED) {
-          frameId = window.setTimeout(poll, 5);
-        } else {
-          gl.deleteSync(sync);
-          frameId = window.setTimeout(cb, 80);
-        }
-      };
-      frameId = window.setTimeout(poll, 5);
-    }
+    let lastTelemetryTime = 0;
+    let cachedActivePath: any = null;
+    let lastMissionId: string | null = null;
 
     const _camTarget = new THREE.Vector3();
-    const _camOffset = new THREE.Vector3();
 
     function tick() {
       const rawDt = clock.getDelta();
       const dt = Math.min(rawDt, 0.05);
+      const now = performance.now();
 
       const inputs = gameInputRef.current;
       if (inputs.bellTrigger) {
@@ -183,7 +173,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         rickshaw.ringBell(gameState.customization.bellType);
       }
 
-      if (isPlaying) {
+      const activePlaying = isPlayingRef.current;
+      const currentCamMode = cameraModeRef.current;
+
+      if (activePlaying) {
         // Update Rickshaw Physics
         rickshaw.update(dt, inputs, city.colliders);
 
@@ -197,8 +190,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
         const missionStatus = missions.update(dt, rickshaw.position);
 
         // Camera Follow Logic
-        if (cameraMode === 'chase') {
-          // Smooth 3rd person chase camera behind rickshaw
+        if (currentCamMode === 'chase') {
           const dist = 6.2;
           const height = 2.8;
           const targetCamX = rickshaw.position.x - Math.sin(rickshaw.heading) * dist;
@@ -215,8 +207,7 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
             rickshaw.position.z + Math.cos(rickshaw.heading) * 3
           );
           camera.lookAt(_camTarget);
-        } else if (cameraMode === 'first_person') {
-          // First person rider handlebar view
+        } else if (currentCamMode === 'first_person') {
           const eyeX = rickshaw.position.x + Math.sin(rickshaw.heading) * 0.4;
           const eyeZ = rickshaw.position.z + Math.cos(rickshaw.heading) * 0.4;
           camera.position.set(eyeX, rickshaw.position.y + 1.5, eyeZ);
@@ -228,56 +219,70 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
           );
           camera.lookAt(_camTarget);
         } else {
-          // Tactical Drone birds-eye view
+          // Tactical Drone view
           camera.position.set(rickshaw.position.x, 38, rickshaw.position.z - 15);
           camera.lookAt(rickshaw.position.x, 0, rickshaw.position.z);
         }
 
-        // Determine current district by proximity to district centers
-        let currentDistId: DistrictId = 'shahbagh';
-        let minDist = Infinity;
-        for (const dist of Object.values(DHAKA_DISTRICTS)) {
-          const d = Math.hypot(rickshaw.position.x - dist.center[0], rickshaw.position.z - dist.center[1]);
-          if (d < minDist) {
-            minDist = d;
-            currentDistId = dist.id;
-          }
-        }
-        const distInfo = DHAKA_DISTRICTS[currentDistId];
+        // Throttle Telemetry update to React (every 80ms ~12Hz) to prevent main thread blocking!
+        if (now - lastTelemetryTime > 80) {
+          lastTelemetryTime = now;
 
-        // Telemetry update to HUD
-        onTelemetryUpdate({
-          speedKmh: rickshaw.speed * 3.6,
-          playerX: rickshaw.position.x,
-          playerZ: rickshaw.position.z,
-          playerHeading: rickshaw.heading,
-          districtId: currentDistId,
-          districtName: distInfo.name,
-          districtBangla: distInfo.banglaName,
-          canPickup: missionStatus.canPickup,
-          canDropoff: missionStatus.canDropoff,
-          distanceToTarget: missionStatus.distanceToTarget,
-          activePath: missions.activeMission
-            ? roadGraph.findRouteByCoords(
+          // Determine current district by proximity
+          let currentDistId: DistrictId = 'shahbagh';
+          let minDist = Infinity;
+          for (const dist of Object.values(DHAKA_DISTRICTS)) {
+            const d = Math.hypot(rickshaw.position.x - dist.center[0], rickshaw.position.z - dist.center[1]);
+            if (d < minDist) {
+              minDist = d;
+              currentDistId = dist.id;
+            }
+          }
+          const distInfo = DHAKA_DISTRICTS[currentDistId];
+
+          // Only calculate A* path when active mission changes
+          const activeMission = missions.activeMission;
+          if (activeMission) {
+            if (activeMission.id !== lastMissionId) {
+              lastMissionId = activeMission.id;
+              cachedActivePath = roadGraph.findRouteByCoords(
                 rickshaw.position.x,
                 rickshaw.position.z,
-                missions.activeMission.dropCoords[0],
-                missions.activeMission.dropCoords[1]
-              )
-            : null,
-          activeMission: missions.activeMission,
-          pendingOffer: missions.pendingOffer
-        });
+                activeMission.dropCoords[0],
+                activeMission.dropCoords[1]
+              );
+            }
+          } else {
+            cachedActivePath = null;
+            lastMissionId = null;
+          }
+
+          onTelemetryUpdate({
+            speedKmh: rickshaw.speed * 3.6,
+            playerX: rickshaw.position.x,
+            playerZ: rickshaw.position.z,
+            playerHeading: rickshaw.heading,
+            districtId: currentDistId,
+            districtName: distInfo.name,
+            districtBangla: distInfo.banglaName,
+            canPickup: missionStatus.canPickup,
+            canDropoff: missionStatus.canDropoff,
+            distanceToTarget: missionStatus.distanceToTarget,
+            activePath: cachedActivePath,
+            activeMission,
+            pendingOffer: missions.pendingOffer
+          });
+        }
       } else {
         // Atmospheric live cinematic camera pan for Title Screen
-        titlePanAngle += dt * 0.15;
-        const panRadius = 75;
+        titlePanAngle += dt * 0.12;
+        const panRadius = 70;
         camera.position.set(
           Math.sin(titlePanAngle) * panRadius,
-          18 + Math.sin(titlePanAngle * 0.5) * 5,
-          Math.cos(titlePanAngle) * panRadius + 40
+          16 + Math.sin(titlePanAngle * 0.5) * 4,
+          Math.cos(titlePanAngle) * panRadius + 30
         );
-        camera.lookAt(0, 6, 80); // Focusing toward Farmgate / Metro corridor
+        camera.lookAt(0, 5, 70);
 
         metro.update(dt, camera.position);
         traffic.update(dt, camera.position);
@@ -285,19 +290,10 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
       }
 
       renderer.render(scene, camera);
-
-      if (isSoftwareGl) {
-        afterDraw(tick);
-      } else {
-        frameId = requestAnimationFrame(tick);
-      }
-    }
-
-    if (isSoftwareGl) {
-      afterDraw(tick);
-    } else {
       frameId = requestAnimationFrame(tick);
     }
+
+    frameId = requestAnimationFrame(tick);
 
     // Handle Window Resize
     const handleResize = () => {
@@ -309,7 +305,6 @@ export const GameCanvas: React.FC<GameCanvasProps> = ({
 
     return () => {
       cancelAnimationFrame(frameId);
-      clearTimeout(frameId);
       window.removeEventListener('resize', handleResize);
       renderer.dispose();
       if (renderer.domElement.parentNode) {

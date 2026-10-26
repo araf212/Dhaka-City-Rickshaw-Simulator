@@ -79,83 +79,10 @@ export default function App() {
     setIsTouchDevice(hasTouch || gameState.settings.touchControls);
   }, []);
 
-  // Keyboard Event Handlers
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      // Ignore if in input elements
-      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
-
-      const code = e.code;
-
-      if (code === 'KeyW' || code === 'ArrowUp') {
-        gameInputRef.current.forward = true;
-      }
-      if (code === 'KeyS' || code === 'ArrowDown') {
-        gameInputRef.current.backward = true;
-      }
-      if (code === 'KeyA' || code === 'ArrowLeft') {
-        gameInputRef.current.left = true;
-      }
-      if (code === 'KeyD' || code === 'ArrowRight') {
-        gameInputRef.current.right = true;
-      }
-      if (code === 'Space') {
-        gameInputRef.current.brake = true;
-        // Also trigger mission accept/dropoff if near beacon
-        if (screen === 'playing') {
-          if (telemetry.canPickup) {
-            handleAcceptMission();
-          } else if (telemetry.canDropoff) {
-            handleDropoffPassenger();
-          }
-        }
-      }
-      if (code === 'KeyB') {
-        gameInputRef.current.bellTrigger = true;
-      }
-      if (code === 'KeyC') {
-        setCameraMode((prev) => (prev === 'chase' ? 'first_person' : prev === 'first_person' ? 'tactical' : 'chase'));
-      }
-      if (code === 'KeyM') {
-        setScreen((prev) => (prev === 'map' ? 'playing' : 'map'));
-      }
-      if (code === 'Escape') {
-        if (screen === 'playing') setScreen('paused');
-        else if (screen === 'paused' || screen === 'map' || screen === 'garage') setScreen('playing');
-      }
-      if (code === 'KeyR') {
-        handleResetRickshaw();
-      }
-    };
-
-    const handleKeyUp = (e: KeyboardEvent) => {
-      const code = e.code;
-      if (code === 'KeyW' || code === 'ArrowUp') gameInputRef.current.forward = false;
-      if (code === 'KeyS' || code === 'ArrowDown') gameInputRef.current.backward = false;
-      if (code === 'KeyA' || code === 'ArrowLeft') gameInputRef.current.left = false;
-      if (code === 'KeyD' || code === 'ArrowRight') gameInputRef.current.right = false;
-      if (code === 'Space') gameInputRef.current.brake = false;
-    };
-
-    const handleBlur = () => {
-      // Clear held keys on window blur to avoid stuck input
-      gameInputRef.current.forward = false;
-      gameInputRef.current.backward = false;
-      gameInputRef.current.left = false;
-      gameInputRef.current.right = false;
-      gameInputRef.current.brake = false;
-    };
-
-    window.addEventListener('keydown', handleKeyDown);
-    window.addEventListener('keyup', handleKeyUp);
-    window.addEventListener('blur', handleBlur);
-
-    return () => {
-      window.removeEventListener('keydown', handleKeyDown);
-      window.removeEventListener('keyup', handleKeyUp);
-      window.removeEventListener('blur', handleBlur);
-    };
-  }, [screen, telemetry.canPickup, telemetry.canDropoff]);
+  const screenRef = useRef(screen);
+  screenRef.current = screen;
+  const telemetryRef = useRef(telemetry);
+  telemetryRef.current = telemetry;
 
   const handleStartGame = (mode: 'career' | 'freeroam') => {
     soundManager.ringRickshawBell('double_ding');
@@ -187,10 +114,10 @@ export default function App() {
 
   const handleResetRickshaw = useCallback(() => {
     if (physicsRef.current) {
-      const currentDist = DHAKA_DISTRICTS[telemetry.districtId];
+      const currentDist = DHAKA_DISTRICTS[telemetryRef.current.districtId];
       physicsRef.current.resetPosition(currentDist.center[0], currentDist.center[1]);
     }
-  }, [telemetry.districtId]);
+  }, []);
 
   const handleFastTravel = useCallback((districtId: DistrictId) => {
     const dist = DHAKA_DISTRICTS[districtId];
@@ -215,6 +142,80 @@ export default function App() {
   const handleMobileInput = useCallback((action: 'forward' | 'backward' | 'left' | 'right' | 'brake', pressed: boolean) => {
     gameInputRef.current[action] = pressed;
   }, []);
+
+  // Keyboard Event Handlers
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (['INPUT', 'TEXTAREA'].includes((e.target as HTMLElement)?.tagName)) return;
+
+      const code = e.code;
+
+      if (code === 'KeyW' || code === 'ArrowUp') {
+        gameInputRef.current.forward = true;
+      }
+      if (code === 'KeyS' || code === 'ArrowDown') {
+        gameInputRef.current.backward = true;
+      }
+      if (code === 'KeyA' || code === 'ArrowLeft') {
+        gameInputRef.current.left = true;
+      }
+      if (code === 'KeyD' || code === 'ArrowRight') {
+        gameInputRef.current.right = true;
+      }
+      if (code === 'Space') {
+        gameInputRef.current.brake = true;
+        if (screenRef.current === 'playing') {
+          if (telemetryRef.current.canPickup) {
+            handleAcceptMission();
+          } else if (telemetryRef.current.canDropoff) {
+            handleDropoffPassenger();
+          }
+        }
+      }
+      if (code === 'KeyB') {
+        gameInputRef.current.bellTrigger = true;
+      }
+      if (code === 'KeyC') {
+        setCameraMode((prev) => (prev === 'chase' ? 'first_person' : prev === 'first_person' ? 'tactical' : 'chase'));
+      }
+      if (code === 'KeyM') {
+        setScreen((prev) => (prev === 'map' ? 'playing' : 'map'));
+      }
+      if (code === 'Escape') {
+        setScreen((prev) => (prev === 'playing' ? 'paused' : prev === 'paused' ? 'playing' : 'playing'));
+      }
+      if (code === 'KeyR') {
+        handleResetRickshaw();
+      }
+    };
+
+    const handleKeyUp = (e: KeyboardEvent) => {
+      const code = e.code;
+      if (code === 'KeyW' || code === 'ArrowUp') gameInputRef.current.forward = false;
+      if (code === 'KeyS' || code === 'ArrowDown') gameInputRef.current.backward = false;
+      if (code === 'KeyA' || code === 'ArrowLeft') gameInputRef.current.left = false;
+      if (code === 'KeyD' || code === 'ArrowRight') gameInputRef.current.right = false;
+      if (code === 'Space') gameInputRef.current.brake = false;
+    };
+
+    const handleBlur = () => {
+      gameInputRef.current.forward = false;
+      gameInputRef.current.backward = false;
+      gameInputRef.current.left = false;
+      gameInputRef.current.right = false;
+      gameInputRef.current.brake = false;
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    window.addEventListener('keyup', handleKeyUp);
+    window.addEventListener('blur', handleBlur);
+
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+      window.removeEventListener('keyup', handleKeyUp);
+      window.removeEventListener('blur', handleBlur);
+    };
+  }, [handleAcceptMission, handleDropoffPassenger, handleResetRickshaw]);
 
   return (
     <div className="relative w-screen h-screen overflow-hidden bg-slate-950 font-sans select-none">

@@ -13,6 +13,9 @@ interface MinimapProps {
   onOpenFullMap: () => void;
 }
 
+const NODE_MAP = new Map<string, typeof ROAD_NODES[0]>();
+ROAD_NODES.forEach((n) => NODE_MAP.set(n.id, n));
+
 export const Minimap: React.FC<MinimapProps> = ({
   playerX,
   playerZ,
@@ -49,12 +52,9 @@ export const Minimap: React.FC<MinimapProps> = ({
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
 
-    const nodeMap = new Map<string, typeof ROAD_NODES[0]>();
-    ROAD_NODES.forEach((n) => nodeMap.set(n.id, n));
-
     ROAD_EDGES.forEach((edge) => {
-      const from = nodeMap.get(edge.from);
-      const to = nodeMap.get(edge.to);
+      const from = NODE_MAP.get(edge.from);
+      const to = NODE_MAP.get(edge.to);
       if (from && to) {
         const x1 = (from.x - playerX) * zoom;
         const y1 = (from.z - playerZ) * zoom;
